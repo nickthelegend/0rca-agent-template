@@ -1,7 +1,8 @@
 from flask import Flask, request, jsonify
 import json
 import base64
-from database import init_db, create_job, get_job, update_job_payment_processing, update_job_status, complete_job, create_access_token, verify_access_token
+import sys
+from database import init_db, create_job, get_job, update_job_payment_processing, update_job_status, complete_job, create_access_token, verify_access_token, get_db
 import threading
 import time
 from algosdk.v2client import algod, indexer
@@ -11,6 +12,7 @@ from algosdk.abi import Method
 from algosdk import mnemonic
 from algokit_utils.transactions.transaction_composer import populate_app_call_resources
 from algosdk.encoding import msgpack_encode
+from my_agent import process_job
 
 app = Flask(__name__)
 
@@ -118,27 +120,14 @@ def verify_transactions(job_id, submitted_txids):
     return True, "All transactions verified"
 
 def execute_job(job_id):
-    """Execute the AI agent job"""
+    """Execute the AI agent job using modular agent logic"""
     job = get_job(job_id)
     if not job:
         return
     
     try:
-        # Simulate AI processing time
-        time.sleep(2)
-        
-        job_input = job['job_input']
-        
-        # Simple AI agent logic based on input
-        if 'translate' in job_input.lower():
-            if 'spanish' in job_input.lower():
-                output = "Hola (Hello in Spanish)"
-            elif 'french' in job_input.lower():
-                output = "Au revoir (Goodbye in French)"
-            else:
-                output = "Translation completed"
-        else:
-            output = f"Processed: {job_input}"
+        # Use modular agent logic from my_agent.py
+        output = process_job(job['job_input'])
         
         # Complete the job
         complete_job(job_id, output)
@@ -205,17 +194,24 @@ def start_job():
     job_input = data["job_input"]
     agent_id = data["agent_id"]
     
+    # Validate Algorand address format
+    if len(sender_address) != 58:
+        return jsonify({"error": "Invalid sender_address: must be 58 characters"}), 400
+    
     job_id, job_input_hash = create_job(job_input, sender_address)
     
-    # Generate real unsigned group transactions
-    unsigned_txns, txn_ids = generate_unsigned_txns(sender_address, agent_id, job_id)
-    
-    return jsonify({
-        "job_id": job_id,
-        "unsigned_group_txns": unsigned_txns,
-        "txn_ids": txn_ids,
-        "payment_required": 1_000_000
-    })
+    try:
+        # Generate real unsigned group transactions
+        unsigned_txns, txn_ids = generate_unsigned_txns(sender_address, agent_id, job_id)
+        
+        return jsonify({
+            "job_id": job_id,
+            "unsigned_group_txns": unsigned_txns,
+            "txn_ids": txn_ids,
+            "payment_required": 1_000_000
+        })
+    except Exception as e:
+        return jsonify({"error": f"Failed to generate transactions: {str(e)}"}), 500
 
 @app.route("/job/<job_id>", methods=["GET"])
 def get_job_status(job_id):
@@ -252,6 +248,73 @@ def get_job_status(job_id):
             "output": None  # Hide output without access token
         })
 
+def get_running_jobs():
+    """Get jobs that are in running status"""
+    with get_db() as conn:
+        return conn.execute(
+            "SELECT * FROM jobs_local WHERE status = 'running' ORDER BY created_at"
+        ).fetchall()
+
+def worker_execute_job(job_id):
+    """Execute a single job using the agent logic"""
+    try:
+        # Get job details
+        with get_db() as conn:
+            job = conn.execute(
+                "SELECT * FROM jobs_local WHERE job_id = ?", (job_id,)
+            ).fetchone()
+        
+        if not job:
+            print(f"Job {job_id} not found")
+            return
+        
+        print(f"Worker processing job {job_id}: {job['job_input']}")
+        
+        # Process job using agent logic
+        result = process_job(job['job_input'])
+        
+        # Complete the job
+        complete_job(job_id, result)
+        print(f"Worker completed job {job_id}")
+        
+    except Exception as e:
+        print(f"Worker job {job_id} failed: {str(e)}")
+        update_job_status(job_id, "failed")
+
+def run_worker():
+    """Background worker loop"""
+    print("Background worker started...")
+    
+    while True:
+        try:
+            # Get all running jobs
+            running_jobs = get_running_jobs()
+            
+            for job in running_jobs:
+                job_id = job['job_id']
+                
+                # Execute job in separate thread
+                thread = threading.Thread(target=worker_execute_job, args=(job_id,))
+                thread.daemon = True
+                thread.start()
+            
+            # Wait before checking again
+            time.sleep(5)
+            
+        except Exception as e:
+            print(f"Worker error: {e}. Continuing...")
+            time.sleep(10)
+
 if __name__ == "__main__":
     init_db()
+    
+    # Start background worker unless --web-only flag
+    if "--web-only" not in sys.argv:
+        print("Starting integrated background worker...")
+        worker_thread = threading.Thread(target=run_worker, daemon=True)
+        worker_thread.start()
+    else:
+        print("Running in web-only mode (no background worker)")
+    
+    print("Starting web server on http://localhost:8000")
     app.run(host="0.0.0.0", port=8000)
