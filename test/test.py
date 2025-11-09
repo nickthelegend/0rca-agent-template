@@ -68,10 +68,13 @@ group = atc.build_group()
 # Extract the Transaction object and encode to msgpack
 for tws in group:
     txn = tws.txn  # Get the Transaction object
+    id = tws.txn.get_txid()  # Get the Transaction object
+    print(id)  # This is the msgpack-encoded unsigned transaction
+
     unsigned_bytes = msgpack_encode(txn)
     print(unsigned_bytes)  # This is the msgpack-encoded unsigned transaction
 # Execute
-result = atc.execute(client, 4)
-print("✅ Success in round:", result.confirmed_round)
-print("Txn ID:", result.tx_ids[0])
-group_id = transaction.calculate_group_id(result.tx_ids)  # txns is a list of unsigned Transaction objects
+# result = atc.execute(client, 4)
+# print("✅ Success in round:", result.confirmed_round)
+# print("Txn ID:", result.tx_ids[0])
+# group_id = transaction.calculate_group_id(result.tx_ids)  # txns is a list of unsigned Transaction objects

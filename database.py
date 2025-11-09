@@ -15,6 +15,7 @@ def init_db():
                 job_input_hash TEXT NOT NULL,
                 sender_address TEXT NOT NULL,
                 group_txid TEXT NOT NULL,
+                txn_ids TEXT,
                 status TEXT NOT NULL,
                 created_at INTEGER DEFAULT (unixepoch()),
                 started_at INTEGER,
@@ -62,6 +63,16 @@ def create_job(job_input, sender_address):
         conn.commit()
     
     return job_id, job_input_hash
+
+def update_job_payment_processing(job_id, txn_ids):
+    """Update job status to payment_processing and store txn_ids"""
+    with get_db() as conn:
+        conn.execute("""
+            UPDATE jobs_local 
+            SET status = 'payment_processing', txn_ids = ?
+            WHERE job_id = ?
+        """, (','.join(txn_ids), job_id))
+        conn.commit()
 
 def get_job(job_id):
     """Get job by ID"""

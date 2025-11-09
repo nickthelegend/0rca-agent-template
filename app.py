@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 import json
 import base64
-from database import init_db, create_job, get_job
+from database import init_db, create_job, get_job, update_job_payment_processing
 from algosdk.v2client import algod
 from algosdk.atomic_transaction_composer import AtomicTransactionComposer, AccountTransactionSigner, TransactionWithSigner
 from algosdk.transaction import PaymentTxn
@@ -18,7 +18,7 @@ receiver = "WAKOSD5LW5FQ5LZZ5AXNWIKGS6QIDMJWCHAMSWV7YRLBD6NYZMLHVNVOOY"
 app_id = 749378614
 method = Method.from_signature("pay(pay)void")
 
-def generate_unsigned_txns(sender_address, agent_id):
+def generate_unsigned_txns(sender_address, agent_id, job_id):
     """Generate real unsigned Algorand transactions"""
     # Create dummy signer for transaction building (won't be used for signing)
     dummy_private_key = mnemonic.to_private_key("announce feed swing base certain rib rose phrase crouch rotate voyage enroll same sort flush emotion pulp airport notice inject pelican zero blossom about honey")
@@ -52,11 +52,20 @@ def generate_unsigned_txns(sender_address, agent_id):
     group = atc.build_group()
     
     unsigned_txns = []
+    txn_ids = []
+    
     for tws in group:
-        unsigned_bytes = msgpack_encode(tws.txn)
+        txn = tws.txn
+        txn_id = txn.get_txid()
+        txn_ids.append(txn_id)
+        
+        unsigned_bytes = msgpack_encode(txn)
         if isinstance(unsigned_bytes, str):
             unsigned_bytes = unsigned_bytes.encode()
         unsigned_txns.append(base64.b64encode(unsigned_bytes).decode())
+    
+    # Update job status to payment_processing with txn_ids
+    update_job_payment_processing(job_id, txn_ids)
     
     return unsigned_txns
 
@@ -80,7 +89,7 @@ def start_job():
     job_id, job_input_hash = create_job(job_input, sender_address)
     
     # Generate real unsigned group transactions
-    unsigned_txns = generate_unsigned_txns(sender_address, agent_id)
+    unsigned_txns = generate_unsigned_txns(sender_address, agent_id, job_id)
     
     return jsonify({
         "job_id": job_id,
