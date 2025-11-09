@@ -1,7 +1,9 @@
 from flask import Flask, request, jsonify
 import json
 import base64
-from database import init_db, create_job, get_job, update_job_payment_processing, update_job_status
+from database import init_db, create_job, get_job, update_job_payment_processing, update_job_status, complete_job, create_access_token, verify_access_token
+import threading
+import time
 from algosdk.v2client import algod, indexer
 from algosdk.atomic_transaction_composer import AtomicTransactionComposer, AccountTransactionSigner, TransactionWithSigner
 from algosdk.transaction import PaymentTxn
@@ -115,6 +117,35 @@ def verify_transactions(job_id, submitted_txids):
     
     return True, "All transactions verified"
 
+def execute_job(job_id):
+    """Execute the AI agent job"""
+    job = get_job(job_id)
+    if not job:
+        return
+    
+    try:
+        # Simulate AI processing time
+        time.sleep(2)
+        
+        job_input = job['job_input']
+        
+        # Simple AI agent logic based on input
+        if 'translate' in job_input.lower():
+            if 'spanish' in job_input.lower():
+                output = "Hola (Hello in Spanish)"
+            elif 'french' in job_input.lower():
+                output = "Au revoir (Goodbye in French)"
+            else:
+                output = "Translation completed"
+        else:
+            output = f"Processed: {job_input}"
+        
+        # Complete the job
+        complete_job(job_id, output)
+        
+    except Exception as e:
+        update_job_status(job_id, "failed")
+
 @app.route("/submit_payment", methods=["POST"])
 def submit_payment():
     """Verify submitted payment transactions"""
@@ -134,9 +165,22 @@ def submit_payment():
     
     if success:
         update_job_status(job_id, "running")
+        
+        # Get job details for agent_id
+        job = get_job(job_id)
+        
+        # Generate access token
+        access_token = create_access_token(job_id, "agent_001")  # Use agent_id from job if stored
+        
+        # Start job execution in background thread
+        thread = threading.Thread(target=execute_job, args=(job_id,))
+        thread.daemon = True
+        thread.start()
+        
         return jsonify({
             "status": "success", 
-            "message": "Payment verified, job started"
+            "message": "Payment verified, job started",
+            "access_token": access_token
         })
     else:
         return jsonify({
@@ -176,16 +220,37 @@ def start_job():
 @app.route("/job/<job_id>", methods=["GET"])
 def get_job_status(job_id):
     """Get job status and result"""
-    job = get_job(job_id)
-    if not job:
-        return jsonify({"error": "Job not found"}), 404
+    # Check for access token
+    access_token = request.args.get('access_token')
     
-    return jsonify({
-        "job_id": job["job_id"],
-        "status": job["status"],
-        "created_at": job["created_at"],
-        "output": job["output"]
-    })
+    if access_token:
+        # Verify access token
+        if not verify_access_token(job_id, access_token):
+            return jsonify({"error": "Invalid or expired access token"}), 401
+        
+        # Return full job details including output
+        job = get_job(job_id)
+        if not job:
+            return jsonify({"error": "Job not found"}), 404
+        
+        return jsonify({
+            "job_id": job["job_id"],
+            "status": job["status"],
+            "created_at": job["created_at"],
+            "output": job["output"]
+        })
+    else:
+        # Without access token, return limited info
+        job = get_job(job_id)
+        if not job:
+            return jsonify({"error": "Job not found"}), 404
+        
+        return jsonify({
+            "job_id": job["job_id"],
+            "status": job["status"],
+            "created_at": job["created_at"],
+            "output": None  # Hide output without access token
+        })
 
 if __name__ == "__main__":
     init_db()

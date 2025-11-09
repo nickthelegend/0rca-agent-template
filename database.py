@@ -38,6 +38,18 @@ def init_db():
                 level TEXT DEFAULT 'info',
                 timestamp INTEGER DEFAULT (unixepoch())
             );
+
+            CREATE TABLE IF NOT EXISTS access_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                access_token TEXT UNIQUE NOT NULL,
+                created_at INTEGER DEFAULT (unixepoch()),
+                FOREIGN KEY (job_id) REFERENCES jobs_local (job_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_access_token ON access_tokens(access_token);
+            CREATE INDEX IF NOT EXISTS idx_job_agent ON access_tokens(job_id, agent_id);
         """)
 
 @contextmanager
@@ -83,6 +95,40 @@ def update_job_status(job_id, status):
             WHERE job_id = ?
         """, (status, job_id))
         conn.commit()
+
+def complete_job(job_id, output):
+    """Complete job with output"""
+    with get_db() as conn:
+        conn.execute("""
+            UPDATE jobs_local 
+            SET status = 'succeeded', output = ?, completed_at = unixepoch()
+            WHERE job_id = ?
+        """, (output, job_id))
+        conn.commit()
+
+def create_access_token(job_id, agent_id):
+    """Generate access token for job"""
+    import secrets
+    access_token = secrets.token_hex(32)  # 64-char hex token
+    
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO access_tokens (job_id, agent_id, access_token)
+            VALUES (?, ?, ?)
+        """, (job_id, agent_id, access_token))
+        conn.commit()
+    
+    return access_token
+
+def verify_access_token(job_id, access_token):
+    """Verify access token for job"""
+    with get_db() as conn:
+        result = conn.execute("""
+            SELECT agent_id FROM access_tokens 
+            WHERE job_id = ? AND access_token = ?
+        """, (job_id, access_token)).fetchone()
+    
+    return result is not None
 
 def get_job(job_id):
     """Get job by ID"""
