@@ -169,8 +169,10 @@ def submit_payment():
         # Get job details for agent_id
         job = get_job(job_id)
         
-        # Generate access token
-        access_token = create_access_token(job_id, "agent_001")  # Use agent_id from job if stored
+        # Generate access token with security context
+        ip_address = request.environ.get('REMOTE_ADDR')
+        user_agent = request.headers.get('User-Agent')
+        access_token = create_access_token(job_id, "agent_001", job['sender_address'], ip_address, user_agent)
         
         # Start job execution in background thread
         thread = threading.Thread(target=execute_job, args=(job_id,))
@@ -224,9 +226,13 @@ def get_job_status(job_id):
     access_token = request.args.get('access_token')
     
     if access_token:
-        # Verify access token
-        if not verify_access_token(job_id, access_token):
-            return jsonify({"error": "Invalid or expired access token"}), 401
+        # Verify access token with security checks
+        ip_address = request.environ.get('REMOTE_ADDR')
+        user_agent = request.headers.get('User-Agent')
+        
+        valid, message = verify_access_token(job_id, access_token, ip_address, user_agent)
+        if not valid:
+            return jsonify({"error": message}), 401
         
         # Return full job details including output
         job = get_job(job_id)
